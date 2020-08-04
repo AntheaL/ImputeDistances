@@ -1,4 +1,3 @@
-import random
 import os
 import numpy as np
 import tensorflow as tf
@@ -28,7 +27,7 @@ def make_reconstruction_loss(n_features):
 
         if weights is not None:
             return weighted_mse(
-                y_true=X_values_observed, y_pred=pred_observed, weighted=weights
+                X_true=X_values_observed, X_pred=pred_observed, weights=weights
             )
         return mse(y_true=X_values_observed, y_pred=pred_observed)
 
@@ -36,7 +35,9 @@ def make_reconstruction_loss(n_features):
 
 
 def weighted_mse(X_true, X_pred, weights):
-    return np.linalg.norm(np.multiply(self.weights, (X_true - X_pred)))
+    return mse(
+        weights*X_true, weights*X_pred
+    )
 
 
 def masked_mae(X_true, X_pred, mask):
@@ -81,7 +82,10 @@ class Autoencoder:
         self.l1_penalty = l1_penalty
         self.l2_penalty = l2_penalty
         self.training = training
-        self.weights = None
+        self.weights = np.ones(len(data))[:, np.newaxis]
+        if n_reads is not None:
+            print("Weighting samples based on the number of reads.")
+            self.weights = self.get_weights(n_reads, exp_rate, thresh)
         self.val_mask = val_mask
         self.val_data = val_data
         if self.val_data is not None and self.val_mask is None:
@@ -90,8 +94,7 @@ class Autoencoder:
             )
             self.val_mask = ~np.isnan(self.val_data)
         if normalize:
-            print(f"centering data")
-            x = self.data.T[1]
+            print("Centering data.")
             mean = np.array(
                 [np.nan_to_num(np.mean(x[~np.isnan(x)])) for x in self.data.T]
             )
@@ -105,11 +108,9 @@ class Autoencoder:
             self.data /= norm_factor
             if self.val_data is not None:
                 self.val_data /= norm_factor
-        if n_reads is not None:
-            print("Weighting samples based on the number of reads.")
-            self.weights = self.get_weights(n_reads, exp_rate, thresh)
 
     def get_weights(self, n_reads, exp_rate, thresh):
+        """Get data weights based on number of reads."""
         nr = n_reads[n_reads > 0]
         nr = np.minimum(nr, thresh)
         nr = np.log(nr)
@@ -118,12 +119,12 @@ class Autoencoder:
         weights = np.exp(exp_rate * (nr - maxr) / (maxr - minr))
         weights_arr = np.zeros(n_reads.shape)
         weights_arr[n_reads > 0] = weights
-        return weights_arr
+        return weights_arr[:, np.newaxis]
 
     def _get_hidden_layer_sizes(self):
-        n_dims = self.data.shape[1]
         return self.layer_sizes
         """
+        n_dims = self.data.shape[1]
         return [
             min(self.layer_sizes[0], 8 * n_dims),
             min(self.layer_sizes[1], 2 * n_dims),
@@ -138,6 +139,7 @@ class Autoencoder:
         n_dims = self.data.shape[1]
 
         inp = Input((2 * self.data.shape[-1]))
+        weights = Input(((1,)))
         x = Dense(
             first_layer_size,
             input_dim=2 * n_dims,
@@ -167,7 +169,7 @@ class Autoencoder:
 
         loss_function = make_reconstruction_loss(n_dims)
 
-        model = Model(inp, output, name="autoencoder")
+        model = Model([inp, weights], output, name="autoencoder")
         model.compile(optimizer=self.optimizer, loss=loss_function)
         return model
 
@@ -177,7 +179,6 @@ class Autoencoder:
     def _create_missing_mask(self):
         if self.data.dtype != "f" and self.data.dtype != "d":
             self.data = self.data.astype(float)
-
         return np.isnan(self.data)
 
     def _train_epoch(self, model, missing_mask, batch_size):
@@ -187,13 +188,15 @@ class Autoencoder:
         indices = np.arange(n_samples)
         np.random.shuffle(indices)
         X_shuffled = input_with_mask[indices]
+        weights_shuffled = self.weights[indices]
 
         for batch_idx in range(n_batches):
             batch_start = batch_idx * batch_size
             batch_end = (batch_idx + 1) * batch_size
             batch_data = X_shuffled[batch_start:batch_end, :]
-            model.train_on_batch(batch_data, batch_data)
-        return model.predict(input_with_mask)
+            batch_weights = weights_shuffled[batch_start:batch_end, :]
+            model.train_on_batch([batch_data, batch_weights], batch_data)
+        return model.predict([input_with_mask, self.weights])
 
     def run(
         self,
@@ -234,7 +237,8 @@ class Autoencoder:
                     early_counts += 1
                     if patience and early_counts == patience:
                         print(
-                            f"early stopping at epoch {epoch}: validation mae did not improve for {patience} epochs"
+                            f"early stopping at epoch {epoch}: \
+                            validation mae did not improve for {patience} epochs"
                         )
                         print(
                             f"best validation score: {best_val}, final validation score: {val_mae}"

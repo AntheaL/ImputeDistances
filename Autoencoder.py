@@ -1,17 +1,7 @@
-import random
 import os
-import pandas as pd
 import numpy as np
 import argparse
 import yaml
-from sklearn.preprocessing import LabelEncoder
-
-from tensorflow.keras.losses import mse
-from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, Input
-from tensorflow.keras.models import Model
-from tensorflow.keras.regularizers import l1_l2
-from collections import defaultdict
-from util import config_to_instance
 from models import Autoencoder
 
 
@@ -81,9 +71,11 @@ tag = args.tag
 if tag is None:
     name, ext = os.path.splitext(os.path.basename(args.src_path))
     exp_rate_str = f"_exp{config['model']['exp_rate']}" if args.n_reads else ""
-    tag = (
-        name
-        + f"_b{config['train']['batch_size']}_d{config['model']['dropout_probability']}{exp_rate_str}"
+    tag_fmt = "_b{}_d{}_e{}"
+    tag = name + tag_fmt.format(
+        config["train"]["batch_size"],
+        config["model"]["dropout_probability"],
+        exp_rate_str,
     )
 
 logs_dir = os.path.join(config["logs_dir"], tag)
