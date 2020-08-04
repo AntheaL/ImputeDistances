@@ -1,0 +1,23 @@
+logs_dir: /gpfs/commons/groups/landau_lab/CHT_ATAC/juliette/ImputeDistances/data/104-tum 
+
+model:
+    training: True
+    #recurrent_weight: 0.5
+    dropout_probability: 0.4
+    layer_sizes: [1500, 300]
+    exp_rate: 2
+    #normalize: True
+    #norm_factor: 100
+    optimizer:
+        class_name: tensorflow.keras.optimizers.Adam
+        lr: 2.0e-4
+    l2_penalty: 0.004
+    l1_penalty: 0.004
+
+train:
+    patience: 1500
+    max_val: 12.7
+    log_every: 50
+    save_every: 500
+    n_epochs: 5000
+    batch_size: 256

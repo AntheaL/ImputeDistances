@@ -1,189 +1,136 @@
-import easygui
-
-def mat_factorization(R, P, Q, K, steps=10000, alpha=0.002, beta=0.02):
-    Q = Q.T
-    for step in range(steps):
-        print (step)
-        for i in range(len(R)):
-            for j in range(len(R[i])):
-                if R[i][j] >= 0 and i>=j:
-                    eij = R[i][j] - numpy.dot(P[i,:],Q[:,j])
-                    for k in range(K):
-                        P[i][k] = P[i][k] + alpha * (2 * eij * Q[k][j] - beta * P[i][k])
-                        Q[k][j] = Q[k][j] + alpha * (2 * eij * P[i][k] - beta * Q[k][j])
-        eR = numpy.dot(P,Q)
-        e = 0
-        for i in range(len(R)):
-            for j in range(len(R[i])):
-                if R[i][j] > 0:
-                    e = e + pow(R[i][j] - numpy.dot(P[i,:],Q[:,j]), 2)
-                    for k in range(K):
-                        e = e + (beta/2) * ( pow(P[i][k],2) + pow(Q[k][j],2) )
-        if e < 0.000001:
-            break
-    return P, Q.T
+import os
+import numpy as np
+import argparse
 
 
-def read_words(filename):
+class Factorizer:
+    def __init__(
+        self,
+        src_path,
+        dst_path,
+        k,
+        alpha=0.01,
+        beta=0.002,
+        epsilon=1e-6,
+        symmetric=False,
+        n_steps=1000,
+        log_every=10,
+        save_every=100,
+    ):
+        self.R = np.load(args.src_path)
+        self.n, self.m = self.R.shape
+        self.k = k
+        self.P = np.random.rand(self.n, self.k)
+        self.Q = np.random.rand(self.k, self.m)
+        self.alpha = alpha
+        self.beta = beta
+        self.epsilon = epsilon
+        self.symmetric = symmetric
+        self.dst_path = dst_path
+        self.n_steps = n_steps
+        self.log_every = log_every
+        self.save_every = save_every
 
-    last = ""
-    with open(filename) as inp:
-        print(filename)
-        while True:
-            buf = inp.read(10240)
-            if not buf:
+    def __call__(self):
+        print(f"running algorithm for {self.n_steps} steps")
+        for step in range(self.n_steps):
+            self.run_step()
+            err, reg = self.get_error()
+            if err + reg < self.epsilon:
                 break
-            words = (last+buf).split()
-            last = words.pop()
-            for word in words:
-                yield word
-        yield last
-def is_number(s):
-    try:
-        float(s)
-        return True
-    except ValueError:
-        return False
+            if step and step % self.save_every == 0:
+                s = os.path.splitext(self.dst_path)
+                dst_path = s[0] + f"_{step}" + s[1]
+                print(f"saving into {dst_path}")
+                np.save(dst_path, np.dot(self.P, self.Q))
+            if step % self.log_every == 0:
+                print(f"step {step}, error: {err}, regularized: {err+reg}")
+
+        nR = np.dot(self.P, self.Q)
+        result = np.zeros((self.n, self.m))
+        for i in range(self.n):
+            for j in range(i + 1 if self.symmetric else self.m):
+                if self.R[i][j] == -1:
+                    result[i][j] = nR[i][j]
+                else:
+                    result[i][j] = self.R[i][j]
+        print(f"saving into {self.dst_path}")
+        np.savetxt(self.dst_path, result)
+
+    def run_step(self):
+        for i in range(self.n):
+            for j in range(i + 1 if self.symmetric else self.m):
+                if self.R[i][j] >= 0:
+                    eij = self.R[i][j] - np.dot(self.P[i, :], self.Q[:, j])
+                    self.P[i] += (
+                        self.alpha * 2 * eij * self.Q[:, j] - self.beta * self.P[i]
+                    )
+                    self.Q[:, j] += (
+                        self.alpha * 2 * eij * self.P[i] - self.beta * self.Q[:, j]
+                    )
+
+    def get_error(self):
+        err = 0
+        reg = 0
+        for i in range(self.n):
+            for j in range(i + 1 if self.symmetric else self.m):
+                if self.R[i][j] > 0:
+                    err += pow(self.R[i][j] - np.dot(self.P[i, :], self.Q[:, j]), 2)
+                    reg += np.sum(
+                        self.beta
+                        / 2
+                        * (np.power(self.P[i], 2) + np.power(self.Q[:, j], 2))
+                    )
+        return err, reg
+
+
 if __name__ == "__main__":
 
-    import numpy
+    parser = argparse.ArgumentParser(description="Running matrix focatorization.")
+    parser.add_argument("--src-path", help="input file", required=True, type=str)
+    parser.add_argument("--dst-path", help="output file", required=False, type=str)
+    parser.add_argument(
+        "--n-dim", help="number of dimensions for latent space", required=True, type=int
+    )
+    parser.add_argument("--alpha", required=False, type=float, default=0.002)
+    parser.add_argument("--beta", required=False, type=float, default=0.002)
+    parser.add_argument(
+        "--n-steps", help="number of steps", required=False, type=int, default=1000
+    )
+    parser.add_argument(
+        "--log-every", help="how often to log", required=False, type=int, default=10
+    )
+    parser.add_argument(
+        "--save-every", help="how often to save", required=False, type=int, default=100
+    )
 
-    i=0
-    j=0
-    missing=0
-    numg=-1
+    parser.add_argument(
+        "--epsilon", help="target error", required=False, type=float, default=10
+    )
+    parser.add_argument(
+        "--symmetric", help="whether input is symmetric", action="store_true"
+    )
 
-    filename=easygui.fileopenbox()
+    args = parser.parse_args()
 
+    dst_path = args.dst_path
+    if dst_path is None:
+        name, ext = os.path.splitext(args.src_path)
+        dst_path = (
+            name + f"_d{args.n_dim}_a{str(args.alpha)[2:]}_b{str(args.beta)[2:]}" + ext
+        )
 
-    for word in read_words(filename):
-        if(is_number(word)):
-            if(i==0):
-                numg=int(word)
-                break
-            else:
-                print("Wrong format")
-                exit()
-    R = numpy.zeros(shape=(numg, numg))
+    factorizer = Factorizer(
+        src_path=args.src_path,
+        dst_path=dst_path,
+        k=args.n_dim,
+        alpha=args.alpha,
+        beta=args.beta,
+        epsilon=args.epsilon,
+        symmetric=args.symmetric,
+        n_steps=args.n_steps,
+        log_every=args.log_every,
+        save_every=args.save_every,
+    )
 
-
-    for word in read_words(filename):
-        if(is_number(word)):
-            if(i==0):
-                continue
-            #print((word))
-            R[i-1][j]=(float)(word)
-            j=j+1
-        else:
-            #print(word.__len__())
-            if(word.__len__()>1):
-                i=i+1
-                j=0
-            else:
-
-                R[i-1][j]=-1
-                missing=missing+1
-                j=j+1
-    print (missing)
-
-    N = len(R)
-    M = len(R[0])
-    K = numg
-
-    P = numpy.random.rand(N,K)
-    Q = numpy.random.rand(M,K)
-
-    nP, nQ = mat_factorization(R, P, Q, K)
-
-    nR = numpy.dot(nP, nQ.T)
-
-    print (nR)
-    Result = numpy.zeros(shape=(numg, numg))
-
-
-    for i in range(len(R)):
-        for j in range(len(R[0])):
-            if(R[i][j]==-1):
-                Result[i][j]=nR[i][j]
-            else:
-                Result[i][j]=R[i][j]
-
-    printed=""
-    i=0
-    j=0
-
-
-
-    f=open(filename[:-4]+"CompletedMatfact.dis","w+")
-    printed=""
-
-
-    i=0
-    j=0
-    for word in read_words(filename):
-        if(is_number(word)):
-            if(i==0):
-                printed = printed + word
-                continue
-            #print((word))
-            R[i-1][j]=(float)(word)
-            printed = printed + " " + word
-            j=j+1
-        else:
-            #print(word.__len__())
-            if(word.__len__()>1):
-                printed = printed + "\n" + word
-                i=i+1
-                j=0
-            else:
-
-                R[i-1][j]=-1
-                printed = printed + " " + str(round(Result[i-1][j],5))
-                missing=missing+1
-                j=j+1
-
-
-    f.write(printed)
-    f.close
-
-'''    
-    for word in read_words('realDisEdit50.dis'):
-
-
-        if(is_number(word)==False and word!="."):
-            printed=printed+"\n"+word
-            i=i+1
-        elif(word!="."):
-            if(float(word)>10):
-                printed=printed+"\n"+word
-            else:
-                if(i==len(R)):
-                    break
-                while(j<i):
-                    #print(i,j,R[i][j])
-                    x=R[i][j]
-                    if(x==-1):
-                        x=round(nR[i][j],5)
-                    printed=printed+" "+str(x)
-                    j=j+1
-                j=0
-
-    f=open("edited76forDambe.dis","w+")
-
-    f.write(printed)
-    f.close
-
-
-
-
-
-'''
-
-
-
-
-
-
-
-
-    #print nR
+    factorizer()
